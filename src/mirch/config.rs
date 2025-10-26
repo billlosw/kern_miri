@@ -69,11 +69,22 @@ impl PhysConfig {
     }
 
     /// Creates a default physical memory configuration with typical values:
+    /// TODO: provide shims to expose layouts config to OSes.
     /// 
+    /// Two kinds of layout:
+    /// 1.
     /// |<-------------------------------Kernel Code Section-------------------------------->|
     /// |<-Boot PT->|<-Kernel Static Section->|<-CPU-local Section->|<-Kernel Stack Section->|
     /// |-----------|-------------------------|---------------------|------------------------|
     /// 0x0      0x1_0000                 0x40_0000             0x41_0000                0x100_0000
+    ///
+    /// 2.
+    /// |<----------------------------Kernel Code Section-------------------------------->|
+    /// |<-Boot PT->|<-Kernel Static Section->|<-Kernel Stack Section->|<-CPU-local Section->|
+    /// |-----------|-------------------------|------------------------|---------------------|
+    /// 0x0      0x1_0000                 0x40_0000                0xff_0000             0x100_0000
+    /// 
+    /// Currently using the second layout. It works with atc25-artifact-evaluation/miri_asterinas.
     /// 
     /// |<-Kernel Code Section->|<-----Free Pages------>|
     /// |-----------------------|-----------------------|
@@ -137,12 +148,29 @@ pub fn kernel_code_page_num() -> usize {
 // Kernel static section accessors
 /// Returns starting physical address of kernel static data (after 64KB boot page table)
 pub const fn kernel_static_start_addr() -> usize {
-    0x10000
+    0x1_0000
 }
 
 /// Returns ending physical address of kernel static data
 pub fn kernel_static_end_addr() -> usize {
     kernel_static_start_addr() + config().kernel_static_size
+}
+
+// Kernel stack accessors
+/// Returns starting physical address of kernel stacks
+pub fn kernel_stack_start_addr() -> usize {
+    kernel_static_end_addr()
+}
+
+/// Returns ending physical address of kernel stacks
+pub fn kernel_stack_end_addr() -> usize {
+    cpu_local_start_addr()
+}
+
+// Virtual address accessors
+/// Returns base virtual address for kernel code mapping
+pub fn kernel_code_base_vaddr() -> usize {
+    config().kernel_code_base_vaddr
 }
 
 // CPU-local storage accessors
@@ -153,30 +181,14 @@ pub fn cpu_local_segment_size() -> usize {
 
 /// Returns starting physical address of CPU-local storage
 pub fn cpu_local_start_addr() -> usize {
-    kernel_static_end_addr()
+    cpu_local_end_addr() - cpu_local_segment_size()
 }
 
 /// Returns ending physical address of CPU-local storage
 pub fn cpu_local_end_addr() -> usize {
-    cpu_local_start_addr() + cpu_local_segment_size()
-}
-
-// Kernel stack accessors
-/// Returns starting physical address of kernel stacks
-pub fn kernel_stack_start_addr() -> usize {
-    cpu_local_end_addr()
-}
-
-/// Returns ending physical address of kernel stacks
-pub fn kernel_stack_end_addr() -> usize {
     kernel_code_end()
 }
 
-// Virtual address accessors
-/// Returns base virtual address for kernel code mapping
-pub fn kernel_code_base_vaddr() -> usize {
-    config().kernel_code_base_vaddr
-}
 
 /// Returns base virtual address for boot page table linear mapping
 pub fn boot_pt_linear_mapping_base_vaddr() -> usize {
