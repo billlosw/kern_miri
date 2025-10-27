@@ -302,8 +302,8 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         }
     }
 
-    fn expose_tag(&mut self, alloc_id: AllocId, tag: BorTag) -> InterpResult<'tcx> {
-        let this = self.eval_context_mut();
+    fn expose_tag(&self, alloc_id: AllocId, tag: BorTag) -> InterpResult<'tcx> {
+        let this = self.eval_context_ref();
         let method = this.machine.borrow_tracker.as_ref().unwrap().borrow().borrow_tracker_method;
         match method {
             BorrowTrackerMethod::StackedBorrows => this.sb_expose_tag(alloc_id, tag),
@@ -363,7 +363,7 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
             // If it does exist, then we have the guarantee that the
             // pointer is readable, and the implicit read access inserted
             // will never cause UB on the pointer itself.
-            let (_, _, kind) = this.get_alloc_info(*alloc_id);
+            let kind = this.get_alloc_info(*alloc_id).kind;
             if matches!(kind, AllocKind::LiveData) {
                 let alloc_extra = this.get_alloc_extra(*alloc_id)?; // can still fail for `extern static`
                 let alloc_borrow_tracker = &alloc_extra.borrow_tracker.as_ref().unwrap();
