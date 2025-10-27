@@ -2,7 +2,7 @@ use std::collections::hash_map::Entry;
 use std::io::Write;
 use std::path::Path;
 
-use rustc_abi::{Align, AlignFromBytesError, Size};
+use rustc_abi::{Align, AlignFromBytesError, ExternAbi, Size};
 use rustc_apfloat::Float;
 use rustc_ast::expand::allocator::alloc_error_handler_name;
 use rustc_hir::def::DefKind;
@@ -493,7 +493,7 @@ trait EvalContextExtPriv<'tcx>: crate::MiriInterpCxExt<'tcx> {
             "kern_miri_record_time" =>  {
                 use std::time::{SystemTime, UNIX_EPOCH};
 
-                let [test_id] = this.check_shim(abi, ExternAbi::Rust, link_name, args)?;
+                let [test_id] = this.check_shim(abi, Conv::Rust, link_name, args)?;
                 let _test_id = this.read_target_usize(test_id)?;
                 let now = SystemTime::now();
                 let since_epoch = now.duration_since(UNIX_EPOCH).unwrap();
@@ -511,14 +511,14 @@ trait EvalContextExtPriv<'tcx>: crate::MiriInterpCxExt<'tcx> {
             }
 
             "kern_miri_set_cpu_local_base" => {
-                let [cpu_base] = this.check_shim(abi, ExternAbi::Rust, link_name, args)?;
+                let [cpu_base] = this.check_shim(abi, Conv::Rust, link_name, args)?;
                 let cpu_base = this.read_target_usize(cpu_base)?;
                 let current_cpu = this.machine.threads.active_cpu;
                 this.machine.threads.cpu_local_base[current_cpu] = cpu_base as usize;
             }
 
             "kern_miri_init_ap" => {
-                let [cpu_id, func, args, task, stack_end, stack_size] = this.check_shim(abi, ExternAbi::Rust, link_name, args)?;
+                let [cpu_id, func, args, task, stack_end, stack_size] = this.check_shim(abi, Conv::Rust, link_name, args)?;
                 let cpu_id = this.read_target_usize(cpu_id)?;
                 let start_routine = this.read_pointer(func)?;
                 let func_arg = this.read_immediate(args)?;
@@ -539,7 +539,7 @@ trait EvalContextExtPriv<'tcx>: crate::MiriInterpCxExt<'tcx> {
             }
 
             "miri_create_new_thread" => {
-                let [func, args, task, stack_end, stack_size] = this.check_shim(abi, ExternAbi::Rust, link_name, args)?;
+                let [func, args, task, stack_end, stack_size] = this.check_shim(abi, Conv::Rust, link_name, args)?;
                 let start_routine = this.read_pointer(func)?;
                 let func_arg = this.read_immediate(args)?;
                 let task = this.deref_pointer(task)?;
@@ -557,7 +557,7 @@ trait EvalContextExtPriv<'tcx>: crate::MiriInterpCxExt<'tcx> {
             },
 
             "miri_switch_to" => {
-                let [task] = this.check_shim(abi, ExternAbi::Rust, link_name, args)?;
+                let [task] = this.check_shim(abi, Conv::Rust, link_name, args)?;
                 let task = this.deref_pointer(task)?;
                 let Some(thread_id) = this.machine.thread_map.get(&task.ptr().addr()) else {
                     throw_machine_stop!(TerminationInfo::Abort(
@@ -571,7 +571,7 @@ trait EvalContextExtPriv<'tcx>: crate::MiriInterpCxExt<'tcx> {
             // OS memory
             "kern_miri_alloc_pages" => {
                 let [paddr, count] =
-                    this.check_shim(abi, ExternAbi::Rust, link_name, args)?;
+                    this.check_shim(abi, Conv::Rust, link_name, args)?;
                 let paddr = this.read_target_usize(paddr)? as usize;
                 let count = this.read_target_usize(count)? as usize;
                 
@@ -585,7 +585,7 @@ trait EvalContextExtPriv<'tcx>: crate::MiriInterpCxExt<'tcx> {
 
             "kern_miri_dealloc_pages" => {
                 let [paddr, count] =
-                this.check_shim(abi, ExternAbi::Rust, link_name, args)?;
+                this.check_shim(abi, Conv::Rust, link_name, args)?;
                 let paddr = this.read_target_usize(paddr)? as usize;
                 let count = this.read_target_usize(count)? as usize;
                 
@@ -594,7 +594,7 @@ trait EvalContextExtPriv<'tcx>: crate::MiriInterpCxExt<'tcx> {
 
             "kern_miri_zero" => {
                 let [paddr, count] =
-                    this.check_shim(abi, ExternAbi::Rust, link_name, args)?;
+                    this.check_shim(abi, Conv::Rust, link_name, args)?;
                 let paddr = this.read_target_usize(paddr)? as usize;
                 let count = this.read_target_usize(count)? as usize;
                 
@@ -615,7 +615,7 @@ trait EvalContextExtPriv<'tcx>: crate::MiriInterpCxExt<'tcx> {
             
             "kern_miri_retype_pages" => {
                 let [paddr, count, page_type, type_size] =
-                    this.check_shim(abi, ExternAbi::Rust, link_name, args)?;
+                    this.check_shim(abi, Conv::Rust, link_name, args)?;
                 let paddr = this.read_target_usize(paddr)? as usize;
                 let count = this.read_target_usize(count)? as usize;
                 let page_type = this.read_target_usize(page_type)? as usize;
@@ -642,7 +642,7 @@ trait EvalContextExtPriv<'tcx>: crate::MiriInterpCxExt<'tcx> {
 
             "kern_miri_set_root_page_table" => {
                 let [paddr] =
-                    this.check_shim(abi, ExternAbi::Rust, link_name, args)?;
+                    this.check_shim(abi, Conv::Rust, link_name, args)?;
                 let paddr = this.read_target_usize(paddr)? as usize;
 
                 mirch::set_page_table(PageTable::new(paddr));
@@ -650,7 +650,7 @@ trait EvalContextExtPriv<'tcx>: crate::MiriInterpCxExt<'tcx> {
             
             "kern_miri_get_cpu_local_va" => {
                 let [cpu_local_va] =
-                    this.check_shim(abi, ExternAbi::Rust, link_name, args)?;
+                    this.check_shim(abi, Conv::Rust, link_name, args)?;
                 let vaddr = this.read_target_usize(cpu_local_va)? as usize;
 
                 this.write_scalar(
@@ -689,7 +689,7 @@ trait EvalContextExtPriv<'tcx>: crate::MiriInterpCxExt<'tcx> {
             }
 
             "kern_miri_copy_untyped" => {
-                let [dst, src, len] = this.check_shim(abi, ExternAbi::Rust, link_name, args)?;
+                let [dst, src, len] = this.check_shim(abi, Conv::Rust, link_name, args)?;
 
                 let mut dst = this.read_target_usize(dst)? as usize;
                 let mut src = this.read_target_usize(src)? as usize;
