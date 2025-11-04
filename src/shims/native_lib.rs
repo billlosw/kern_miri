@@ -92,16 +92,11 @@ trait EvalContextExtPriv<'tcx>: crate::MiriInterpCxExt<'tcx> {
     fn get_func_ptr_explicitly_from_lib(&mut self, link_name: Symbol) -> Option<CodePtr> {
         let this = self.eval_context_mut();
         // Try getting the function from the shared library.
-        // On windows `_lib_path` will be unused, hence the name starting with `_`.
-        let (lib, _lib_path) = this.machine.native_lib.as_ref().unwrap();
-        let func: libloading::Symbol<'_, unsafe extern "C" fn()> = unsafe {
-            match lib.get(link_name.as_str().as_bytes()) {
-                Ok(x) => x,
-                Err(_) => {
-                    return None;
-                }
-            }
-        };
+        let (lib, lib_path) = this.machine.native_lib.as_ref().unwrap();
+        let func: libloading::Symbol<'_, unsafe extern "C" fn()> =
+            unsafe { lib.get(link_name.as_str().as_bytes()).ok()? };
+        #[expect(clippy::as_conversions)] // fn-ptr to raw-ptr cast needs `as`.
+        let fn_ptr = *func.deref() as *mut std::ffi::c_void;
 
         // FIXME: this is a hack!
         // The `libloading` crate will automatically load system libraries like `libc`.
@@ -114,18 +109,25 @@ trait EvalContextExtPriv<'tcx>: crate::MiriInterpCxExt<'tcx> {
         // This code is a reimplementation of the mechanism for getting `dli_fname` in `libloading`,
         // from: https://docs.rs/libloading/0.7.3/src/libloading/os/unix/mod.rs.html#411
         // using the `libc` crate where this interface is public.
-        let mut info = std::mem::MaybeUninit::<libc::Dl_info>::uninit();
+        let mut info = std::mem::MaybeUninit::<libc::Dl_info>::zeroed();
         unsafe {
-            if libc::dladdr(*func.deref() as *const _, info.as_mut_ptr()) != 0 {
-                if std::ffi::CStr::from_ptr(info.assume_init().dli_fname).to_str().unwrap()
-                    != _lib_path.to_str().unwrap()
+            if libc::dladdr(fn_ptr, info.as_mut_ptr()) != 0 {
+                let info = info.assume_init();
+                #[cfg(target_os = "cygwin")]
+                let fname_ptr = info.dli_fname.as_ptr();
+                #[cfg(not(target_os = "cygwin"))]
+                let fname_ptr = info.dli_fname;
+                assert!(!fname_ptr.is_null());
+                if std::ffi::CStr::from_ptr(fname_ptr).to_str().unwrap()
+                    != lib_path.to_str().unwrap()
                 {
                     return None;
                 }
             }
         }
+
         // Return a pointer to the function.
-        Some(CodePtr(*func.deref() as *mut _))
+        Some(CodePtr(fn_ptr))
     }
 }
 
@@ -160,16 +162,12 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
             }
             let imm = this.read_immediate(arg)?;
             libffi_args.push(imm_to_carg(&imm, this)?);
-            // If we are passing a pointer, prepare the memory it points to.
+            // If we are passing a pointer, expose its provenance. Below, all exposed memory
+            // (previously exposed and new exposed) will then be properly prepared.
             if matches!(arg.layout.ty.kind(), ty::RawPtr(..)) {
                 let ptr = imm.to_scalar().to_pointer(this)?;
                 let Some(prov) = ptr.provenance else {
-                    // Pointer without provenance may not access any memory.
-                    continue;
-                };
-                // We use `get_alloc_id` for its best-effort behaviour with Wildcard provenance.
-                let Some(alloc_id) = prov.get_alloc_id() else {
-                    // Wildcard pointer, whatever it points to must be already exposed.
+                    // Pointer without provenance may not access any memory anyway, skip.
                     continue;
                 };
                 // The first time this happens, print a warning.
@@ -178,12 +176,12 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                     this.emit_diagnostic(NonHaltingDiagnostic::NativeCallSharedMem);
                 }
 
-                this.prepare_for_native_call(alloc_id, prov)?;
+                this.expose_provenance(prov)?;
             }
         }
 
-        // FIXME: In the future, we should also call `prepare_for_native_call` on all previously
-        // exposed allocations, since C may access any of them.
+        // Prepare all exposed memory.
+        this.prepare_exposed_for_native_call()?;
 
         // Convert them to `libffi::high::Arg` type.
         let libffi_args = libffi_args
@@ -270,7 +268,7 @@ fn imm_to_carg<'tcx>(v: &ImmTy<'tcx>, cx: &impl HasDataLayout) -> InterpResult<'
             CArg::USize(v.to_scalar().to_target_usize(cx)?.try_into().unwrap()),
         ty::RawPtr(..) => {
             let s = v.to_scalar().to_pointer(cx)?.addr();
-            // This relies on the `expose_provenance` in `addr_from_alloc_id`.
+            // This relies on the `expose_provenance` in `prepare_for_native_call`.
             CArg::RawPtr(std::ptr::with_exposed_provenance_mut(s.bytes_usize()))
         }
         _ => throw_unsup_format!("unsupported argument type for native call: {}", v.layout.ty),

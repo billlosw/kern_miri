@@ -44,8 +44,7 @@ pub fn flagsplit(flags: &str) -> Vec<String> {
 fn build_native_lib() -> PathBuf {
     let cc = env::var("CC").unwrap_or_else(|_| "cc".into());
     // Target directory that we can write to.
-    let so_target_dir =
-        Path::new(&env::var_os("CARGO_TARGET_DIR").unwrap()).join("miri-native-lib");
+    let so_target_dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("miri-native-lib");
     // Create the directory if it does not already exist.
     std::fs::create_dir_all(&so_target_dir)
         .expect("Failed to create directory for shared object file");
@@ -101,7 +100,7 @@ fn miri_config(
     let mut config = Config {
         target: Some(target.to_owned()),
         program,
-        out_dir: PathBuf::from(std::env::var_os("CARGO_TARGET_DIR").unwrap()).join("miri_ui"),
+        out_dir: PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("miri_ui"),
         threads: std::env::var("MIRI_TEST_THREADS")
             .ok()
             .map(|threads| NonZero::new(threads.parse().unwrap()).unwrap()),
@@ -217,15 +216,11 @@ fn run_tests(
         ui_test::default_file_filter,
         // This could be used to overwrite the `Config` on a per-test basis.
         |_, _| {},
-        (
-            match args.format {
-                Format::Terse => status_emitter::Text::quiet(),
-                Format::Pretty => status_emitter::Text::verbose(),
-            },
-            status_emitter::Gha::</* GHA Actions groups*/ false> {
-                name: format!("{mode:?} {path} ({target})"),
-            },
-        ),
+        // No GHA output as that would also show in the main rustc repo.
+        match args.format {
+            Format::Terse => status_emitter::Text::quiet(),
+            Format::Pretty => status_emitter::Text::verbose(),
+        },
     )
 }
 
@@ -274,13 +269,13 @@ regexes! {
     // erase thread caller ids
     r"call [0-9]+"                  => "call ID",
     // erase platform module paths
-    "sys::pal::[a-z]+::"                  => "sys::pal::PLATFORM::",
+    r"\bsys::([a-z_]+)::[a-z]+::"   => "sys::$1::PLATFORM::",
     // Windows file paths
     r"\\"                           => "/",
     // erase Rust stdlib path
     "[^ \n`]*/(rust[^/]*|checkout)/library/" => "RUSTLIB/",
     // erase platform file paths
-    "sys/pal/[a-z]+/"                    => "sys/pal/PLATFORM/",
+    r"\bsys/([a-z_]+)/[a-z]+\b"     => "sys/$1/PLATFORM",
     // erase paths into the crate registry
     r"[^ ]*/\.?cargo/registry/.*/(.*\.rs)"  => "CARGO_REGISTRY/.../$1",
 }
@@ -323,10 +318,10 @@ fn main() -> Result<()> {
     let mut args = std::env::args_os();
 
     // Skip the program name and check whether this is a `./miri run-dep` invocation
-    if let Some(first) = args.nth(1) {
-        if first == "--miri-run-dep-mode" {
-            return run_dep_mode(target, args);
-        }
+    if let Some(first) = args.nth(1)
+        && first == "--miri-run-dep-mode"
+    {
+        return run_dep_mode(target, args);
     }
 
     ui(Mode::Pass, "tests/pass", &target, WithoutDependencies, tmpdir.path())?;

@@ -24,11 +24,9 @@ pub fn setup(
     let ask_user = !only_setup;
     let print_sysroot = only_setup && has_arg_flag("--print-sysroot"); // whether we just print the sysroot path
     let show_setup = only_setup && !print_sysroot;
-    if !only_setup {
-        if let Some(sysroot) = std::env::var_os("MIRI_SYSROOT") {
-            // Skip setup step if MIRI_SYSROOT is explicitly set, *unless* we are `cargo miri setup`.
-            return sysroot.into();
-        }
+    if !only_setup && let Some(sysroot) = std::env::var_os("MIRI_SYSROOT") {
+        // Skip setup step if MIRI_SYSROOT is explicitly set, *unless* we are `cargo miri setup`.
+        return sysroot.into();
     }
 
     // Determine where the rust sources are located.  The env var trumps auto-detection.
@@ -115,7 +113,7 @@ pub fn setup(
         // https://github.com/rust-lang/miri/issues/1421,
         // https://github.com/rust-lang/miri/issues/2429). Looks like setting
         // `RUSTC_WRAPPER` to the empty string overwrites `build.rustc-wrapper` set via
-        // `config.toml`.
+        // `bootstrap.toml`.
         command.env("RUSTC_WRAPPER", "");
 
         if show_setup {

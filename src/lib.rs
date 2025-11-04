@@ -1,6 +1,7 @@
 #![feature(rustc_private)]
-#![feature(cell_update)]
+#![feature(cfg_match)]
 #![feature(float_gamma)]
+#![feature(float_erf)]
 #![feature(map_try_insert)]
 #![feature(never_type)]
 #![feature(try_blocks)]
@@ -8,8 +9,6 @@
 #![feature(variant_count)]
 #![feature(yeet_expr)]
 #![feature(nonzero_ops)]
-#![feature(let_chains)]
-#![feature(trait_upcasting)]
 #![feature(strict_overflow_ops)]
 #![feature(pointer_is_aligned_to)]
 #![feature(unqualified_local_imports)]
@@ -42,14 +41,7 @@
     rustc::potential_query_instability,
     rustc::untranslatable_diagnostic,
 )]
-#![warn(
-    rust_2018_idioms,
-    unqualified_local_imports,
-    clippy::cast_possible_wrap, // unsigned -> signed
-    clippy::cast_sign_loss, // signed -> unsigned
-    clippy::cast_lossless,
-    clippy::cast_possible_truncation,
-)]
+#![warn(rust_2018_idioms, unqualified_local_imports, clippy::as_conversions)]
 // Needed for rustdoc from bootstrap (with `-Znormalize-docs`).
 #![recursion_limit = "256"]
 
@@ -61,7 +53,7 @@ extern crate tracing;
 extern crate rustc_abi;
 extern crate rustc_apfloat;
 extern crate rustc_ast;
-extern crate rustc_attr_parsing;
+extern crate rustc_attr_data_structures;
 extern crate rustc_const_eval;
 extern crate rustc_data_structures;
 extern crate rustc_errors;
@@ -70,6 +62,7 @@ extern crate rustc_index;
 extern crate rustc_middle;
 extern crate rustc_session;
 extern crate rustc_span;
+extern crate rustc_symbol_mangling;
 extern crate rustc_target;
 // Linking `rustc_driver` pulls in the required  object code as the rest of the rustc crates are
 // shipped only as rmeta files.
@@ -120,7 +113,7 @@ pub use crate::borrow_tracker::stacked_borrows::{
 };
 pub use crate::borrow_tracker::tree_borrows::{EvalContextExt as _, Tree};
 pub use crate::borrow_tracker::{BorTag, BorrowTrackerMethod, EvalContextExt as _, RetagFields};
-pub use crate::clock::{Clock, Instant};
+pub use crate::clock::{Instant, MonotonicClock};
 pub use crate::concurrency::cpu_affinity::MAX_CPUS;
 pub use crate::concurrency::data_race::{
     AtomicFenceOrd, AtomicReadOrd, AtomicRwOrd, AtomicWriteOrd, EvalContextExt as _,
@@ -133,6 +126,7 @@ pub use crate::concurrency::thread::{
     BlockReason, DynUnblockCallback, EvalContextExt as _, StackEmptyCallback, ThreadId,
     ThreadManager, TimeoutAnchor, TimeoutClock, UnblockKind,
 };
+pub use crate::concurrency::{GenmcConfig, GenmcCtx};
 pub use crate::diagnostics::{
     EvalContextExt as _, NonHaltingDiagnostic, TerminationInfo, report_error,
 };
@@ -140,7 +134,7 @@ pub use crate::eval::{
     AlignmentCheck, BacktraceStyle, IsolatedOp, MiriConfig, MiriEntryFnType, RejectOpWith,
     ValidationMode, create_ecx, eval_entry,
 };
-pub use crate::helpers::{AccessKind, EvalContextExt as _};
+pub use crate::helpers::{AccessKind, EvalContextExt as _, ToU64 as _, ToUsize as _};
 pub use crate::intrinsics::EvalContextExt as _;
 pub use crate::machine::{
     AllocExtra, DynMachineCallback, FrameExtra, MachineCallback, MemoryKind, MiriInterpCx,
@@ -169,7 +163,7 @@ pub const MIRI_DEFAULT_ARGS: &[&str] = &[
     "-Zalways-encode-mir",
     "-Zextra-const-ub-checks",
     "-Zmir-emit-retag",
-    "-Zmir-keep-place-mention",
+    "-Zmir-preserve-ub",
     "-Zmir-opt-level=0",
     "-Zmir-enable-passes=-CheckAlignment,-CheckNull",
     // Deduplicating diagnostics means we miss events when tracking what happens during an

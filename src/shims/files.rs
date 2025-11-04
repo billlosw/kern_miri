@@ -1,6 +1,7 @@
 use std::any::Any;
 use std::collections::BTreeMap;
-use std::io::{IsTerminal, Read, SeekFrom, Write};
+use std::fs::{File, Metadata};
+use std::io::{IsTerminal, Seek, SeekFrom, Write};
 use std::marker::CoercePointee;
 use std::ops::Deref;
 use std::rc::{Rc, Weak};
@@ -140,8 +141,8 @@ pub trait FileDescription: std::fmt::Debug + FileDescriptionExt {
         _communicate_allowed: bool,
         _ptr: Pointer,
         _len: usize,
-        _dest: &MPlaceTy<'tcx>,
         _ecx: &mut MiriInterpCx<'tcx>,
+        _finish: DynMachineCallback<'tcx, Result<usize, IoError>>,
     ) -> InterpResult<'tcx> {
         throw_unsup_format!("cannot read from {}", self.name());
     }
@@ -154,8 +155,8 @@ pub trait FileDescription: std::fmt::Debug + FileDescriptionExt {
         _communicate_allowed: bool,
         _ptr: Pointer,
         _len: usize,
-        _dest: &MPlaceTy<'tcx>,
         _ecx: &mut MiriInterpCx<'tcx>,
+        _finish: DynMachineCallback<'tcx, Result<usize, IoError>>,
     ) -> InterpResult<'tcx> {
         throw_unsup_format!("cannot write to {}", self.name());
     }
@@ -192,7 +193,7 @@ pub trait FileDescription: std::fmt::Debug + FileDescriptionExt {
         false
     }
 
-    fn as_unix(&self) -> &dyn UnixFileDescription {
+    fn as_unix<'tcx>(&self, _ecx: &MiriInterpCx<'tcx>) -> &dyn UnixFileDescription {
         panic!("Not a unix file descriptor: {}", self.name());
     }
 }
@@ -207,19 +208,16 @@ impl FileDescription for io::Stdin {
         communicate_allowed: bool,
         ptr: Pointer,
         len: usize,
-        dest: &MPlaceTy<'tcx>,
         ecx: &mut MiriInterpCx<'tcx>,
+        finish: DynMachineCallback<'tcx, Result<usize, IoError>>,
     ) -> InterpResult<'tcx> {
-        let mut bytes = vec![0; len];
         if !communicate_allowed {
             // We want isolation mode to be deterministic, so we have to disallow all reads, even stdin.
             helpers::isolation_abort_error("`read` from stdin")?;
         }
-        let result = Read::read(&mut &*self, &mut bytes);
-        match result {
-            Ok(read_size) => ecx.return_read_success(ptr, &bytes, read_size, dest),
-            Err(e) => ecx.set_last_error_and_return(e, dest),
-        }
+
+        let result = ecx.read_from_host(&*self, len, ptr)?;
+        finish.call(ecx, result)
     }
 
     fn is_tty(&self, communicate_allowed: bool) -> bool {
@@ -237,22 +235,19 @@ impl FileDescription for io::Stdout {
         _communicate_allowed: bool,
         ptr: Pointer,
         len: usize,
-        dest: &MPlaceTy<'tcx>,
         ecx: &mut MiriInterpCx<'tcx>,
+        finish: DynMachineCallback<'tcx, Result<usize, IoError>>,
     ) -> InterpResult<'tcx> {
-        let bytes = ecx.read_bytes_ptr_strip_provenance(ptr, Size::from_bytes(len))?;
-        // We allow writing to stderr even with isolation enabled.
-        let result = Write::write(&mut &*self, bytes);
+        // We allow writing to stdout even with isolation enabled.
+        let result = ecx.write_to_host(&*self, len, ptr)?;
         // Stdout is buffered, flush to make sure it appears on the
         // screen.  This is the write() syscall of the interpreted
         // program, we want it to correspond to a write() syscall on
         // the host -- there is no good in adding extra buffering
         // here.
         io::stdout().flush().unwrap();
-        match result {
-            Ok(write_size) => ecx.return_write_success(write_size, dest),
-            Err(e) => ecx.set_last_error_and_return(e, dest),
-        }
+
+        finish.call(ecx, result)
     }
 
     fn is_tty(&self, communicate_allowed: bool) -> bool {
@@ -270,21 +265,108 @@ impl FileDescription for io::Stderr {
         _communicate_allowed: bool,
         ptr: Pointer,
         len: usize,
-        dest: &MPlaceTy<'tcx>,
         ecx: &mut MiriInterpCx<'tcx>,
+        finish: DynMachineCallback<'tcx, Result<usize, IoError>>,
     ) -> InterpResult<'tcx> {
-        let bytes = ecx.read_bytes_ptr_strip_provenance(ptr, Size::from_bytes(len))?;
         // We allow writing to stderr even with isolation enabled.
+        let result = ecx.write_to_host(&*self, len, ptr)?;
         // No need to flush, stderr is not buffered.
-        let result = Write::write(&mut &*self, bytes);
-        match result {
-            Ok(write_size) => ecx.return_write_success(write_size, dest),
-            Err(e) => ecx.set_last_error_and_return(e, dest),
-        }
+        finish.call(ecx, result)
     }
 
     fn is_tty(&self, communicate_allowed: bool) -> bool {
         communicate_allowed && self.is_terminal()
+    }
+}
+
+#[derive(Debug)]
+pub struct FileHandle {
+    pub(crate) file: File,
+    pub(crate) writable: bool,
+}
+
+impl FileDescription for FileHandle {
+    fn name(&self) -> &'static str {
+        "file"
+    }
+
+    fn read<'tcx>(
+        self: FileDescriptionRef<Self>,
+        communicate_allowed: bool,
+        ptr: Pointer,
+        len: usize,
+        ecx: &mut MiriInterpCx<'tcx>,
+        finish: DynMachineCallback<'tcx, Result<usize, IoError>>,
+    ) -> InterpResult<'tcx> {
+        assert!(communicate_allowed, "isolation should have prevented even opening a file");
+
+        let result = ecx.read_from_host(&self.file, len, ptr)?;
+        finish.call(ecx, result)
+    }
+
+    fn write<'tcx>(
+        self: FileDescriptionRef<Self>,
+        communicate_allowed: bool,
+        ptr: Pointer,
+        len: usize,
+        ecx: &mut MiriInterpCx<'tcx>,
+        finish: DynMachineCallback<'tcx, Result<usize, IoError>>,
+    ) -> InterpResult<'tcx> {
+        assert!(communicate_allowed, "isolation should have prevented even opening a file");
+
+        let result = ecx.write_to_host(&self.file, len, ptr)?;
+        finish.call(ecx, result)
+    }
+
+    fn seek<'tcx>(
+        &self,
+        communicate_allowed: bool,
+        offset: SeekFrom,
+    ) -> InterpResult<'tcx, io::Result<u64>> {
+        assert!(communicate_allowed, "isolation should have prevented even opening a file");
+        interp_ok((&mut &self.file).seek(offset))
+    }
+
+    fn close<'tcx>(
+        self,
+        communicate_allowed: bool,
+        _ecx: &mut MiriInterpCx<'tcx>,
+    ) -> InterpResult<'tcx, io::Result<()>> {
+        assert!(communicate_allowed, "isolation should have prevented even opening a file");
+        // We sync the file if it was opened in a mode different than read-only.
+        if self.writable {
+            // `File::sync_all` does the checks that are done when closing a file. We do this to
+            // to handle possible errors correctly.
+            let result = self.file.sync_all();
+            // Now we actually close the file and return the result.
+            drop(self.file);
+            interp_ok(result)
+        } else {
+            // We drop the file, this closes it but ignores any errors
+            // produced when closing it. This is done because
+            // `File::sync_all` cannot be done over files like
+            // `/dev/urandom` which are read-only. Check
+            // https://github.com/rust-lang/miri/issues/999#issuecomment-568920439
+            // for a deeper discussion.
+            drop(self.file);
+            interp_ok(Ok(()))
+        }
+    }
+
+    fn metadata<'tcx>(&self) -> InterpResult<'tcx, io::Result<Metadata>> {
+        interp_ok(self.file.metadata())
+    }
+
+    fn is_tty(&self, communicate_allowed: bool) -> bool {
+        communicate_allowed && self.file.is_terminal()
+    }
+
+    fn as_unix<'tcx>(&self, ecx: &MiriInterpCx<'tcx>) -> &dyn UnixFileDescription {
+        assert!(
+            ecx.target_os_is_unix(),
+            "unix file operations are only available for unix targets"
+        );
+        self
     }
 }
 
@@ -302,18 +384,21 @@ impl FileDescription for NullOutput {
         _communicate_allowed: bool,
         _ptr: Pointer,
         len: usize,
-        dest: &MPlaceTy<'tcx>,
         ecx: &mut MiriInterpCx<'tcx>,
+        finish: DynMachineCallback<'tcx, Result<usize, IoError>>,
     ) -> InterpResult<'tcx> {
         // We just don't write anything, but report to the user that we did.
-        ecx.return_write_success(len, dest)
+        finish.call(ecx, Ok(len))
     }
 }
+
+/// Internal type of a file-descriptor - this is what [`FdTable`] expects
+pub type FdNum = i32;
 
 /// The file descriptor table
 #[derive(Debug)]
 pub struct FdTable {
-    pub fds: BTreeMap<i32, DynFileDescriptionRef>,
+    pub fds: BTreeMap<FdNum, DynFileDescriptionRef>,
     /// Unique identifier for file description, used to differentiate between various file description.
     next_file_description_id: FdId,
 }
@@ -349,12 +434,12 @@ impl FdTable {
     }
 
     /// Insert a new file description to the FdTable.
-    pub fn insert_new(&mut self, fd: impl FileDescription) -> i32 {
+    pub fn insert_new(&mut self, fd: impl FileDescription) -> FdNum {
         let fd_ref = self.new_ref(fd);
         self.insert(fd_ref)
     }
 
-    pub fn insert(&mut self, fd_ref: DynFileDescriptionRef) -> i32 {
+    pub fn insert(&mut self, fd_ref: DynFileDescriptionRef) -> FdNum {
         self.insert_with_min_num(fd_ref, 0)
     }
 
@@ -362,8 +447,8 @@ impl FdTable {
     pub fn insert_with_min_num(
         &mut self,
         file_handle: DynFileDescriptionRef,
-        min_fd_num: i32,
-    ) -> i32 {
+        min_fd_num: FdNum,
+    ) -> FdNum {
         // Find the lowest unused FD, starting from min_fd. If the first such unused FD is in
         // between used FDs, the find_map combinator will return it. If the first such unused FD
         // is after all other used FDs, the find_map combinator will return None, and we will use
@@ -389,56 +474,57 @@ impl FdTable {
         new_fd_num
     }
 
-    pub fn get(&self, fd_num: i32) -> Option<DynFileDescriptionRef> {
+    pub fn get(&self, fd_num: FdNum) -> Option<DynFileDescriptionRef> {
         let fd = self.fds.get(&fd_num)?;
         Some(fd.clone())
     }
 
-    pub fn remove(&mut self, fd_num: i32) -> Option<DynFileDescriptionRef> {
+    pub fn remove(&mut self, fd_num: FdNum) -> Option<DynFileDescriptionRef> {
         self.fds.remove(&fd_num)
     }
 
-    pub fn is_fd_num(&self, fd_num: i32) -> bool {
+    pub fn is_fd_num(&self, fd_num: FdNum) -> bool {
         self.fds.contains_key(&fd_num)
     }
 }
 
 impl<'tcx> EvalContextExt<'tcx> for crate::MiriInterpCx<'tcx> {}
 pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
-    /// Helper to implement `FileDescription::read`:
-    /// This is only used when `read` is successful.
-    /// `actual_read_size` should be the return value of some underlying `read` call that used
-    /// `bytes` as its output buffer.
-    /// The length of `bytes` must not exceed either the host's or the target's `isize`.
-    /// `bytes` is written to `buf` and the size is written to `dest`.
-    fn return_read_success(
+    /// Read data from a host `Read` type, store the result into machine memory,
+    /// and return whether that worked.
+    fn read_from_host(
         &mut self,
-        buf: Pointer,
-        bytes: &[u8],
-        actual_read_size: usize,
-        dest: &MPlaceTy<'tcx>,
-    ) -> InterpResult<'tcx> {
+        mut file: impl io::Read,
+        len: usize,
+        ptr: Pointer,
+    ) -> InterpResult<'tcx, Result<usize, IoError>> {
         let this = self.eval_context_mut();
-        // If reading to `bytes` did not fail, we write those bytes to the buffer.
-        // Crucially, if fewer than `bytes.len()` bytes were read, only write
-        // that much into the output buffer!
-        this.write_bytes_ptr(buf, bytes[..actual_read_size].iter().copied())?;
 
-        // The actual read size is always less than what got originally requested so this cannot fail.
-        this.write_int(u64::try_from(actual_read_size).unwrap(), dest)?;
-        interp_ok(())
+        let mut bytes = vec![0; len];
+        let result = file.read(&mut bytes);
+        match result {
+            Ok(read_size) => {
+                // If reading to `bytes` did not fail, we write those bytes to the buffer.
+                // Crucially, if fewer than `bytes.len()` bytes were read, only write
+                // that much into the output buffer!
+                this.write_bytes_ptr(ptr, bytes[..read_size].iter().copied())?;
+                interp_ok(Ok(read_size))
+            }
+            Err(e) => interp_ok(Err(IoError::HostError(e))),
+        }
     }
 
-    /// Helper to implement `FileDescription::write`:
-    /// This function is only used when `write` is successful, and writes `actual_write_size` to `dest`
-    fn return_write_success(
+    /// Write data to a host `Write` type, withthe bytes taken from machine memory.
+    fn write_to_host(
         &mut self,
-        actual_write_size: usize,
-        dest: &MPlaceTy<'tcx>,
-    ) -> InterpResult<'tcx> {
+        mut file: impl io::Write,
+        len: usize,
+        ptr: Pointer,
+    ) -> InterpResult<'tcx, Result<usize, IoError>> {
         let this = self.eval_context_mut();
-        // The actual write size is always less than what got originally requested so this cannot fail.
-        this.write_int(u64::try_from(actual_write_size).unwrap(), dest)?;
-        interp_ok(())
+
+        let bytes = this.read_bytes_ptr_strip_provenance(ptr, Size::from_bytes(len))?;
+        let result = file.write(bytes);
+        interp_ok(result.map_err(IoError::HostError))
     }
 }

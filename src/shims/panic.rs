@@ -15,7 +15,7 @@ use rustc_abi::ExternAbi;
 use rustc_middle::{mir, ty};
 use rustc_target::spec::PanicStrategy;
 
-use self::helpers::check_arg_count;
+use self::helpers::check_intrinsic_arg_count;
 use crate::*;
 
 /// Holds all of the relevant data for when unwinding hits a `try` frame.
@@ -77,7 +77,7 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         // a pointer to `Box<dyn Any + Send + 'static>`.
 
         // Get all the arguments.
-        let [try_fn, data, catch_fn] = check_arg_count(args)?;
+        let [try_fn, data, catch_fn] = check_intrinsic_arg_count(args)?;
         let try_fn = this.read_pointer(try_fn)?;
         let data = this.read_immediate(data)?;
         let catch_fn = this.read_pointer(catch_fn)?;
@@ -85,6 +85,7 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         // Now we make a function call, and pass `data` as first and only argument.
         let f_instance = this.get_ptr_fn(try_fn)?.as_instance()?;
         trace!("try_fn: {:?}", f_instance);
+        #[allow(clippy::cloned_ref_to_slice_refs)] // the code is clearer as-is
         this.call_function(
             f_instance,
             ExternAbi::Rust,
@@ -144,7 +145,8 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                 // Directly return to caller of `try`.
                 StackPopCleanup::Goto {
                     ret: catch_unwind.ret,
-                    unwind: mir::UnwindAction::Continue,
+                    // `catch_fn` must not unwind.
+                    unwind: mir::UnwindAction::Unreachable,
                 },
             )?;
 
