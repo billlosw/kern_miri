@@ -106,7 +106,8 @@ impl PhysConfig {
 static mut PHYSICAL_MEM_CONFIG: PhysConfig = PhysConfig::zero();
 
 fn config() -> &'static PhysConfig {
-    unsafe { &PHYSICAL_MEM_CONFIG }
+    // unsafe { &PHYSICAL_MEM_CONFIG }
+    unsafe { &*(&raw const PHYSICAL_MEM_CONFIG as *const PhysConfig) }
 }
 
 /// Initializes the global physical memory configuration

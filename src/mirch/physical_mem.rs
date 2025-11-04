@@ -17,20 +17,29 @@ pub fn init_pseudo_physical_mem(config: PhysConfig) {
 }
 
 /// Returns an immutable reference to `PhysicalMemory` instance.
+/// creating a shared reference to mutable static is prohibited in rust2024+
+pub fn physical_mem_ptr() -> *const PhysicalMemory {
+    &raw const PHYSICAL_MEM as *const PhysicalMemory
+}
+
 pub fn physical_mem() -> &'static PhysicalMemory {
-    unsafe { &PHYSICAL_MEM }
+    unsafe { &*physical_mem_ptr() }
 }
 
 /// Returns a mutable reference to `PhysicalMemory` instance.
+pub fn physical_mem_mut_ptr() -> *mut PhysicalMemory {
+    &raw mut PHYSICAL_MEM as *mut PhysicalMemory
+}
+
 pub fn physical_mem_mut() -> &'static mut PhysicalMemory {
-    unsafe { &mut PHYSICAL_MEM }
+    unsafe { &mut *physical_mem_mut_ptr() }
 }
 
 /// Convert a physical address to a pointer that point to
 /// the corresponding position of the simulated physical memory.
 pub fn paddr_to_mem(paddr: usize) -> *mut u8 {
     unsafe {
-        physical_mem().mem.add(paddr)
+        (*physical_mem()).mem.add(paddr)
     }
 } 
 

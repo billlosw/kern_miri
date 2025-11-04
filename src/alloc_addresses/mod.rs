@@ -264,7 +264,7 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
             let kind = rustc_const_eval::interpret::MemoryKind::Machine(MiriMemoryKind::Kernel);
             let allocation = {
                 let allocation = mirch::create_allocation_at(actual_addr, Layout::from_size_align(type_size, type_size).unwrap());
-                let extra = MiriMachine::init_alloc_extra(ecx, alloc_id, kind, allocation.size(), allocation.align).unwrap();
+                let extra = MiriMachine::init_local_allocation(ecx, alloc_id, kind, allocation.size(), allocation.align).unwrap();
                 allocation.with_extra(extra)
             };
 
@@ -315,7 +315,7 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
             let new_alloc_id = ecx.tcx.reserve_alloc_id();
             let allocation = {
                 let mut new_allocation = mirch::create_allocation_at(paddr - offset as usize, Layout::from_size_align(original_alloc_info.size.bytes_usize(), original_alloc_info.align.bytes_usize()).unwrap());
-                let extra = MiriMachine::init_alloc_extra(ecx, new_alloc_id, kind, original_alloc_info.size, original_alloc_info.align).unwrap();
+                let extra = MiriMachine::init_local_allocation(ecx, new_alloc_id, kind, original_alloc_info.size, original_alloc_info.align).unwrap();
                 
                 let alloc_range = rustc_middle::mir::interpret::alloc_range(Size::ZERO, original_alloc.size());
                 let init_mask = original_alloc.init_mask();
@@ -570,7 +570,7 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                 let (new_allocation, kind) = {
                     
                     let mut allocation = mirch::create_allocation_at(base_paddr as usize, Layout::from_size_align(old_allocation.size().bytes_usize(), old_allocation.align.bytes_usize()).unwrap());
-                    let extra = MiriMachine::init_alloc_extra(ecx, alloc_id, *kind, old_allocation.size(), old_allocation.align)?;
+                    let extra = MiriMachine::init_local_allocation(ecx, alloc_id, *kind, old_allocation.size(), old_allocation.align)?;
                     
                     let alloc_range = rustc_middle::mir::interpret::alloc_range(Size::ZERO, old_allocation.size());
                     let init_mask = old_allocation.init_mask();

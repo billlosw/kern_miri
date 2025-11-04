@@ -34,7 +34,6 @@ use crate::concurrency::cpu_affinity::{self, CpuAffinityMask};
 use crate::concurrency::data_race::{self, NaReadType, NaWriteType};
 use crate::concurrency::{AllocDataRaceHandler, GenmcCtx, GlobalDataRaceHandler, weak_memory};
 use crate::*;
-use crate::alloc_addresses::EvalContextExtPriv;
 use crate::mirch::{self, PageState, TypedKind};
 
 /// First real-time signal.
@@ -1457,7 +1456,7 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         // Make sure the original allocation has been allocated an address.
         let _original_addr = {
             let this = ecx.eval_context_ref();
-            this.addr_from_alloc_id(id, kind).unwrap()
+            this.addr_from_alloc_id(id, Some(kind)).unwrap()
         };
         
         let alloc_size_usize = origin_alloc.size().bytes_usize();

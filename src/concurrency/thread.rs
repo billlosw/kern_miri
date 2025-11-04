@@ -778,7 +778,7 @@ impl<'tcx> ThreadManager<'tcx> {
     /// used in stateless model checkers such as Loom: run the active thread as
     /// long as we can and switch only when we have to (the active thread was
     /// blocked, terminated, or has explicitly asked to be preempted).
-    fn schedule(&mut self, clock: &Clock) -> InterpResult<'tcx, SchedulingAction> {
+    fn schedule(&mut self, clock: &MonotonicClock) -> InterpResult<'tcx, SchedulingAction> {
         if let ThreadState::Terminated = self.threads[self.active_thread].state {
             self.active_thread = ThreadId::MAIN_THREAD;
             return interp_ok(SchedulingAction::ExecuteStep);

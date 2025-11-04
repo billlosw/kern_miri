@@ -525,7 +525,6 @@ pub fn eval_entry<'tcx>(
         index += 1;
     }
 
-    let (return_code, leak_check) = report_error(&ecx, err)?;
     // If we get here there was no fatal error.
 
     // Possibly check for memory leaks.
