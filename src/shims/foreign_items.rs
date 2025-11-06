@@ -507,6 +507,16 @@ trait EvalContextExtPriv<'tcx>: crate::MiriInterpCxExt<'tcx> {
 
                 this.machine.record.push(since_epoch);
             }
+            
+            // FIXME: is it really nanoseconds?
+            "kern_miri_get_ticks" => {
+                let [] = this.check_shim(abi, Conv::Rust, link_name, args)?;
+                let duration = this.machine.monotonic_clock.now().duration_since(this.machine.monotonic_clock.epoch());
+                let ticks = u64::try_from(duration.as_nanos()).map_err(|_| {
+                    err_unsup_format!("programs running longer than 2^64 nanoseconds are not supported")
+                })?;
+                this.write_scalar(Scalar::from_u64(ticks), dest)?;
+            }
 
             // OS thread operations
             "kern_miri_get_cpu_local_base" => {
