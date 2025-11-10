@@ -60,9 +60,39 @@ This final command will start the interpretation of the Asterinas kernel within 
 
 ### Run with other (axplat example)
 
-The crate or source code must use the same toolchain version as KernMiri. Take axplat as an example.
+Basically just add a new function `fn miri_start(_argc: isize, _argv: *const *const u8) -> isize` as the entry point of Miri. For instance,`examples/miri-hello-kernel/src/main.rs`:
 
-TODO!
+```rust
+#![no_std]
+#![no_main]
+extern crate axplat_kernmiri;
+
+#[unsafe(no_mangle)]
+fn miri_start(_argc: isize, _argv: *const *const u8) -> isize {
+    main(0,0x44000000);
+}
+
+#[axplat::main]
+fn main(cpu_id: usize, arg: usize) -> ! {
+    axplat::console_println!("Hello, ArceOS!");
+    axplat::console_println!("cpu_id = {cpu_id}, arg = {arg:#x}");
+    for _ in 0..5 {
+        axplat::time::busy_wait(axplat::time::TimeValue::from_secs(1));
+        axplat::console_println!("{:?} elapsed.", axplat::time::monotonic_time());
+    }
+    axplat::console_println!("All done, shutting down!");
+    axplat::power::system_off();
+}
+
+#[cfg(not(test))]
+#[panic_handler]
+fn panic(info: &core::panic::PanicInfo) -> ! {
+    axplat::console_println!("{info}");
+    axplat::power::system_off()
+}
+```
+
+Then run ` RUSTFLAGS="-A warnings" cargo miri run --target x86_64-unknown-none` under directory `/examples/miri-hello-kernel`.
 
 ## Updating the toolchain version
 
